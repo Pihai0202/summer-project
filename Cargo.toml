@@ -15,3 +15,4 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 chrono = "0.4"
 parking_lot = "0.12"
 rayon = "1.10"
+rfd = "0.14"

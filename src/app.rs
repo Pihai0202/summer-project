@@ -153,19 +153,21 @@ impl App for SystemMonitorApp {
             }
         }
 
-        // 3. Handle Log Exports
+        // 3. Handle Log Exports with Native OS Save File Dialog
         if export_csv_requested {
             let metrics_snap = self.metrics.read().clone();
-            match LogExporter::export_csv(&metrics_snap) {
-                Ok(path) => self.show_toast(format!("✅ CSV 記錄檔已成功匯出至: {}", path.display())),
+            match LogExporter::prompt_and_export_csv(&metrics_snap) {
+                Ok(Some(path)) => self.show_toast(format!("✅ CSV 記錄檔已下載儲存至: {}", path.display())),
+                Ok(None) => {} // User cancelled dialog
                 Err(err) => self.show_toast(format!("❌ CSV 匯出失敗: {}", err)),
             }
         }
 
         if export_json_requested {
             let metrics_snap = self.metrics.read().clone();
-            match LogExporter::export_json(&metrics_snap) {
-                Ok(path) => self.show_toast(format!("✅ JSON 記錄檔已成功匯出至: {}", path.display())),
+            match LogExporter::prompt_and_export_json(&metrics_snap) {
+                Ok(Some(path)) => self.show_toast(format!("✅ JSON 記錄檔已下載儲存至: {}", path.display())),
+                Ok(None) => {} // User cancelled dialog
                 Err(err) => self.show_toast(format!("❌ JSON 匯出失敗: {}", err)),
             }
         }

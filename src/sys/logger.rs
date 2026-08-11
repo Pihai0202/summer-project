@@ -2,7 +2,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use chrono::Local;
-use crate::sys::metrics::{FocusedProcessTracker, SystemMetrics};
+use rfd::FileDialog;
+use crate::sys::metrics::SystemMetrics;
 
 pub struct AutoSaveLogger {
     log_dir: PathBuf,
@@ -79,7 +80,6 @@ impl AutoSaveLogger {
             );
 
             let _ = file.write_all(line.as_bytes());
-            // Immediate flush ensures crash resistance!
             let _ = file.flush();
         }
     }
@@ -88,17 +88,42 @@ impl AutoSaveLogger {
 pub struct LogExporter;
 
 impl LogExporter {
-    /// Exports current system metrics & focused process data to CSV file
-    pub fn export_csv(metrics: &SystemMetrics) -> Result<PathBuf, String> {
-        let log_dir = PathBuf::from("logs");
-        if !log_dir.exists() {
-            fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    /// Opens a native OS Save File dialog allowing the user to select custom download location for CSV
+    pub fn prompt_and_export_csv(metrics: &SystemMetrics) -> Result<Option<PathBuf>, String> {
+        let default_filename = format!("sysmon_export_{}.csv", Local::now().format("%Y%m%d_%H%M%S"));
+
+        if let Some(target_path) = FileDialog::new()
+            .set_title("請選擇 CSV 紀錄檔儲存位置")
+            .set_file_name(&default_filename)
+            .add_filter("CSV 表格檔案 (*.csv)", &["csv"])
+            .save_file()
+        {
+            Self::write_csv_to_path(&target_path, metrics)?;
+            Ok(Some(target_path))
+        } else {
+            Ok(None) // User cancelled dialog
         }
+    }
 
-        let filename = format!("sysmon_export_{}.csv", Local::now().format("%Y%m%d_%H%M%S"));
-        let filepath = log_dir.join(filename);
+    /// Opens a native OS Save File dialog allowing the user to select custom download location for JSON
+    pub fn prompt_and_export_json(metrics: &SystemMetrics) -> Result<Option<PathBuf>, String> {
+        let default_filename = format!("sysmon_export_{}.json", Local::now().format("%Y%m%d_%H%M%S"));
 
-        let mut file = File::create(&filepath).map_err(|e| e.to_string())?;
+        if let Some(target_path) = FileDialog::new()
+            .set_title("請選擇 JSON 紀錄檔儲存位置")
+            .set_file_name(&default_filename)
+            .add_filter("JSON 數據檔案 (*.json)", &["json"])
+            .save_file()
+        {
+            Self::write_json_to_path(&target_path, metrics)?;
+            Ok(Some(target_path))
+        } else {
+            Ok(None) // User cancelled dialog
+        }
+    }
+
+    fn write_csv_to_path(path: &Path, metrics: &SystemMetrics) -> Result<(), String> {
+        let mut file = File::create(path).map_err(|e| e.to_string())?;
 
         let header = "Timestamp,Hostname,OS_Kernel,Uptime_Secs,CPU_Usage_Pct,RAM_Used_MB,RAM_Total_MB,GPU_Usage_Pct,Total_Processes,Total_Threads\n";
         file.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
@@ -136,21 +161,11 @@ impl LogExporter {
         }
 
         file.flush().map_err(|e| e.to_string())?;
-
-        Ok(filepath)
+        Ok(())
     }
 
-    /// Exports current system metrics & focused process data to JSON file
-    pub fn export_json(metrics: &SystemMetrics) -> Result<PathBuf, String> {
-        let log_dir = PathBuf::from("logs");
-        if !log_dir.exists() {
-            fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
-        }
-
-        let filename = format!("sysmon_export_{}.json", Local::now().format("%Y%m%d_%H%M%S"));
-        let filepath = log_dir.join(filename);
-
-        let mut file = File::create(&filepath).map_err(|e| e.to_string())?;
+    fn write_json_to_path(path: &Path, metrics: &SystemMetrics) -> Result<(), String> {
+        let mut file = File::create(path).map_err(|e| e.to_string())?;
 
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let ram_used_mb = metrics.mem.used_bytes as f64 / (1024.0 * 1024.0);
@@ -201,7 +216,6 @@ impl LogExporter {
 
         file.write_all(json_content.as_bytes()).map_err(|e| e.to_string())?;
         file.flush().map_err(|e| e.to_string())?;
-
-        Ok(filepath)
+        Ok(())
     }
 }
