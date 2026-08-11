@@ -36,12 +36,6 @@ cd btop-egui
 cargo run
 ```
 
-### 3. 編譯正式發行檔 (Build Release Binary)
-```bash
-cargo build --release
-```
-編譯完成後的執行檔將生成於：
-`target/release/btop-egui.exe` (Windows) 或 `target/release/btop-egui` (Linux/macOS)
 
 ---
 
