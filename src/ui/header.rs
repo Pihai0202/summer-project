@@ -20,6 +20,8 @@ impl HeaderView {
         metrics: &SystemMetrics,
         current_filter: &mut ViewFilter,
         refresh_ms: &mut u64,
+        on_export_csv: &mut impl FnMut(),
+        on_export_json: &mut impl FnMut(),
     ) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
@@ -42,33 +44,35 @@ impl HeaderView {
                     .color(BtopTheme::TEXT_PRIMARY)
                     .strong(),
             );
-            ui.label(
-                egui::RichText::new(format!("🐧 {}", metrics.os_kernel))
-                    .color(BtopTheme::TEXT_MUTED)
-                    .size(12.0),
-            );
 
             ui.separator();
 
-            // Uptime
-            let uptime = metrics.uptime_secs;
-            let days = uptime / 86400;
-            let hours = (uptime % 86400) / 3600;
-            let mins = (uptime % 3600) / 60;
-            let secs = uptime % 60;
-            let uptime_str = if days > 0 {
-                format!("⏱ {}d {}h {}m", days, hours, mins)
-            } else {
-                format!("⏱ {}h {}m {}s", hours, mins, secs)
-            };
+            // Auto-Save Crash Protection Indicator
             ui.label(
-                egui::RichText::new(uptime_str)
-                    .color(BtopTheme::TEXT_MUTED)
-                    .size(12.0),
+                egui::RichText::new("🟢 自動存檔中 (Crash Proof)")
+                    .color(BtopTheme::GPU_GREEN)
+                    .size(11.0),
             );
 
             // Right-aligned toolbar
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Export Buttons
+                if ui
+                    .button(egui::RichText::new("📄 匯出 JSON").color(BtopTheme::RAM_MAGENTA).size(12.0))
+                    .clicked()
+                {
+                    on_export_json();
+                }
+
+                if ui
+                    .button(egui::RichText::new("💾 匯出 CSV").color(BtopTheme::DISK_ORANGE).size(12.0))
+                    .clicked()
+                {
+                    on_export_csv();
+                }
+
+                ui.separator();
+
                 // Refresh Rate Combo
                 ui.horizontal(|ui| {
                     ui.label(

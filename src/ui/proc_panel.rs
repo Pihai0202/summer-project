@@ -1,5 +1,6 @@
 use egui::{Align, Frame, Layout, ScrollArea, Ui};
-use crate::sys::metrics::ProcItem;
+use egui_plot::{Line, Plot, PlotPoints};
+use crate::sys::metrics::{FocusedProcessTracker, ProcItem};
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
 
@@ -10,6 +11,13 @@ pub enum SortColumn {
     Pid,
     Name,
     DiskIo,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProcAction {
+    Focus(u32, String, String),
+    Unfocus,
+    Kill(u32),
 }
 
 pub struct ProcPanelView {
@@ -37,8 +45,121 @@ impl ProcPanelView {
         &mut self,
         ui: &mut Ui,
         processes: &[ProcItem],
-        on_kill: &mut impl FnMut(u32) -> Result<(), String>,
-    ) {
+        focused_process: Option<&FocusedProcessTracker>,
+    ) -> Vec<ProcAction> {
+        let mut actions = Vec::new();
+
+        // 1. Render Dedicated Focused Process Profiler Inspector if active
+        if let Some(focused) = focused_process {
+            Frame::canvas(ui.style())
+                .fill(BtopTheme::BG_CARD)
+                .stroke(egui::Stroke::new(1.5_f32, BtopTheme::CPU_CYAN))
+                .rounding(8.0)
+                .inner_margin(12.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(SvgIcons::render_white("focus_icon", SvgIcons::PROCESS, 20.0));
+                        ui.heading(
+                            egui::RichText::new(format!(
+                                "📌 特效進程監控儀表板 (PID: {} - {})",
+                                focused.pid, focused.name
+                            ))
+                            .color(BtopTheme::CPU_CYAN)
+                            .size(15.0)
+                            .strong(),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .button(egui::RichText::new("❌ 取消釘選").color(BtopTheme::PROC_RED))
+                                .clicked()
+                            {
+                                actions.push(ProcAction::Unfocus);
+                            }
+                        });
+                    });
+
+                    ui.add_space(6.0);
+
+                    let last_cpu = focused.cpu_history.last();
+                    let last_mem = focused.mem_history.last();
+                    let last_disk = focused.disk_history.last();
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("使用者: {}", focused.user))
+                                .color(BtopTheme::TEXT_MUTED)
+                                .size(12.0),
+                        );
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(format!("當前 CPU: {:.1}%", last_cpu))
+                                .color(BtopTheme::CPU_CYAN)
+                                .strong(),
+                        );
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(format!("當前 RAM: {:.1} MB", last_mem))
+                                .color(BtopTheme::RAM_MAGENTA)
+                                .strong(),
+                        );
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new(format!("當前 Disk I/O: {:.1} KB/s", last_disk))
+                                .color(BtopTheme::DISK_ORANGE)
+                                .strong(),
+                        );
+                    });
+
+                    ui.add_space(8.0);
+
+                    // Dual Line Charts: Process CPU & Memory Trends
+                    ui.columns(2, |cols| {
+                        let cpu_pts: PlotPoints = focused
+                            .cpu_history
+                            .values()
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v])
+                            .collect();
+                        let cpu_line = Line::new(cpu_pts)
+                            .color(BtopTheme::CPU_CYAN)
+                            .width(2.0_f32)
+                            .name("Proc CPU %");
+
+                        Plot::new("focused_cpu_plot")
+                            .height(75.0)
+                            .show_axes([false, true])
+                            .show_grid(true)
+                            .include_y(0.0)
+                            .allow_zoom(false)
+                            .allow_drag(false)
+                            .show(&mut cols[0], |plot_ui| plot_ui.line(cpu_line));
+
+                        let mem_pts: PlotPoints = focused
+                            .mem_history
+                            .values()
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v])
+                            .collect();
+                        let mem_line = Line::new(mem_pts)
+                            .color(BtopTheme::RAM_MAGENTA)
+                            .width(2.0_f32)
+                            .name("Proc RAM MB");
+
+                        Plot::new("focused_mem_plot")
+                            .height(75.0)
+                            .show_axes([false, true])
+                            .show_grid(true)
+                            .include_y(0.0)
+                            .allow_zoom(false)
+                            .allow_drag(false)
+                            .show(&mut cols[1], |plot_ui| plot_ui.line(mem_line));
+                    });
+                });
+
+            ui.add_space(8.0);
+        }
+
+        // 2. Main Process Table Card
         Frame::canvas(ui.style())
             .fill(BtopTheme::BG_CARD)
             .stroke(egui::Stroke::new(1.0_f32, BtopTheme::BORDER))
@@ -136,9 +257,9 @@ impl ProcPanelView {
 
                 // Table Header
                 egui::Grid::new("proc_table_header")
-                    .num_columns(7)
-                    .spacing([12.0, 4.0])
-                    .min_col_width(50.0)
+                    .num_columns(8)
+                    .spacing([10.0, 4.0])
+                    .min_col_width(45.0)
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new("PID").color(BtopTheme::TEXT_MUTED).strong());
                         ui.label(egui::RichText::new("進程名稱 (Name)").color(BtopTheme::TEXT_MUTED).strong());
@@ -146,6 +267,7 @@ impl ProcPanelView {
                         ui.label(egui::RichText::new("Memory").color(BtopTheme::RAM_MAGENTA).strong());
                         ui.label(egui::RichText::new("Disk I/O").color(BtopTheme::DISK_ORANGE).strong());
                         ui.label(egui::RichText::new("使用者").color(BtopTheme::TEXT_MUTED).strong());
+                        ui.label(egui::RichText::new("監控").color(BtopTheme::CPU_CYAN).strong());
                         ui.label(egui::RichText::new("操作").color(BtopTheme::PROC_RED).strong());
                         ui.end_row();
                     });
@@ -154,20 +276,27 @@ impl ProcPanelView {
 
                 // Process Rows List
                 ScrollArea::vertical()
-                    .max_height(280.0)
+                    .max_height(260.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         egui::Grid::new("proc_table_body")
-                            .num_columns(7)
-                            .spacing([12.0, 6.0])
+                            .num_columns(8)
+                            .spacing([10.0, 6.0])
                             .striped(true)
                             .show(ui, |ui| {
                                 for proc_ in filtered {
                                     let is_selected = self.selected_pid == Some(proc_.pid);
+                                    let is_focused = focused_process.map(|f| f.pid) == Some(proc_.pid);
 
                                     // PID
                                     let pid_text = egui::RichText::new(format!("{}", proc_.pid))
-                                        .color(if is_selected { BtopTheme::CPU_CYAN } else { BtopTheme::TEXT_MUTED })
+                                        .color(if is_focused {
+                                            BtopTheme::CPU_CYAN
+                                        } else if is_selected {
+                                            BtopTheme::RAM_MAGENTA
+                                        } else {
+                                            BtopTheme::TEXT_MUTED
+                                        })
                                         .monospace();
                                     if ui.selectable_label(is_selected, pid_text).clicked() {
                                         self.selected_pid = Some(proc_.pid);
@@ -176,7 +305,7 @@ impl ProcPanelView {
                                     // Name
                                     ui.label(
                                         egui::RichText::new(&proc_.name)
-                                            .color(BtopTheme::TEXT_PRIMARY)
+                                            .color(if is_focused { BtopTheme::CPU_CYAN } else { BtopTheme::TEXT_PRIMARY })
                                             .strong(),
                                     );
 
@@ -218,10 +347,29 @@ impl ProcPanelView {
                                             .size(11.0),
                                     );
 
+                                    // Pin / Focus Button
+                                    ui.horizontal(|ui| {
+                                        if is_focused {
+                                            if ui
+                                                .button(egui::RichText::new("📌 已釘選").color(BtopTheme::CPU_CYAN).size(11.0))
+                                                .clicked()
+                                            {
+                                                actions.push(ProcAction::Unfocus);
+                                            }
+                                        } else {
+                                            if ui
+                                                .button(egui::RichText::new("📌 釘選").color(BtopTheme::TEXT_MUTED).size(11.0))
+                                                .clicked()
+                                            {
+                                                actions.push(ProcAction::Focus(proc_.pid, proc_.name.clone(), proc_.user.clone()));
+                                            }
+                                        }
+                                    });
+
                                     // Kill button
                                     ui.horizontal(|ui| {
                                         if ui
-                                            .button(egui::RichText::new(" ❌ 結束 ").color(BtopTheme::PROC_RED).size(11.0))
+                                            .button(egui::RichText::new("❌ 結束").color(BtopTheme::PROC_RED).size(11.0))
                                             .clicked()
                                         {
                                             self.kill_confirm_pid = Some((proc_.pid, proc_.name.clone()));
@@ -264,7 +412,7 @@ impl ProcPanelView {
                             )
                             .clicked()
                         {
-                            let _ = on_kill(pid);
+                            actions.push(ProcAction::Kill(pid));
                             self.kill_confirm_pid = None;
                         }
 
@@ -274,5 +422,7 @@ impl ProcPanelView {
                     });
                 });
         }
+
+        actions
     }
 }

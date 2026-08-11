@@ -4,6 +4,8 @@ use std::time::Instant;
 use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, Pid, ProcessRefreshKind, RefreshKind, System};
 use parking_lot::RwLock;
 
+use crate::sys::logger::AutoSaveLogger;
+
 /// Fixed-size history ring buffer for real-time plot graphs
 #[derive(Clone, Debug)]
 pub struct RingBuffer {
@@ -114,6 +116,30 @@ pub struct ProcItem {
     pub status: String,
 }
 
+/// Dedicated Resource Tracker for a specific focused process (PID)
+#[derive(Clone, Debug)]
+pub struct FocusedProcessTracker {
+    pub pid: u32,
+    pub name: String,
+    pub user: String,
+    pub cpu_history: RingBuffer,
+    pub mem_history: RingBuffer,
+    pub disk_history: RingBuffer,
+}
+
+impl FocusedProcessTracker {
+    pub fn new(pid: u32, name: String, user: String, capacity: usize) -> Self {
+        Self {
+            pid,
+            name,
+            user,
+            cpu_history: RingBuffer::new(capacity),
+            mem_history: RingBuffer::new(capacity),
+            disk_history: RingBuffer::new(capacity),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SystemMetrics {
     pub hostname: String,
@@ -126,17 +152,20 @@ pub struct SystemMetrics {
     pub disks: Vec<DiskItem>,
     pub networks: Vec<NetItem>,
     pub processes: Vec<ProcItem>,
+    pub focused_process: Option<FocusedProcessTracker>,
     pub total_processes: usize,
     pub total_threads: usize,
     pub last_update: Instant,
 }
 
-/// Thread-safe Collector handle
+/// Thread-safe Collector handle with crash-proof auto-saver
 pub struct MetricsCollector {
     sys: System,
     disks: Disks,
     networks: Networks,
     metrics: Arc<RwLock<SystemMetrics>>,
+    logger: AutoSaveLogger,
+    history_capacity: usize,
     last_sample: Instant,
     prev_net_sample: Instant,
 }
@@ -193,23 +222,42 @@ impl MetricsCollector {
             disks: Vec::new(),
             networks: Vec::new(),
             processes: Vec::new(),
+            focused_process: None,
             total_processes: 0,
             total_threads: 0,
             last_update: Instant::now(),
         };
 
         let metrics_arc = Arc::new(RwLock::new(initial_metrics));
+        let logger = AutoSaveLogger::new();
 
         let collector = Self {
             sys,
             disks,
             networks,
             metrics: metrics_arc.clone(),
+            logger,
+            history_capacity: capacity,
             last_sample: Instant::now(),
             prev_net_sample: Instant::now(),
         };
 
         (collector, metrics_arc)
+    }
+
+    pub fn set_focused_pid(&mut self, pid: u32, name: String, user: String) {
+        let mut metrics = self.metrics.write();
+        metrics.focused_process = Some(FocusedProcessTracker::new(
+            pid,
+            name,
+            user,
+            self.history_capacity,
+        ));
+    }
+
+    pub fn clear_focused_pid(&mut self) {
+        let mut metrics = self.metrics.write();
+        metrics.focused_process = None;
     }
 
     pub fn update(&mut self) {
@@ -299,7 +347,6 @@ impl MetricsCollector {
             let rx_speed = net.received() as f64 / net_elapsed;
             let tx_speed = net.transmitted() as f64 / net_elapsed;
 
-            // Find existing net item to preserve history
             let mut rx_hist = metrics
                 .networks
                 .iter()
@@ -331,6 +378,8 @@ impl MetricsCollector {
         // Update Processes
         let mut total_threads = 0;
         let mut proc_list = Vec::new();
+        let focused_pid = metrics.focused_process.as_ref().map(|f| f.pid);
+        let mut focused_sample: Option<(f32, f64, f64)> = None;
 
         for (pid, proc_) in self.sys.processes() {
             let disk_usage = proc_.disk_usage();
@@ -341,14 +390,26 @@ impl MetricsCollector {
                 0.0
             };
 
+            let proc_pid = pid.as_u32();
+            let read_sec = disk_usage.read_bytes as f64 / elapsed_secs;
+            let write_sec = disk_usage.written_bytes as f64 / elapsed_secs;
+
+            if Some(proc_pid) == focused_pid {
+                focused_sample = Some((
+                    proc_.cpu_usage(),
+                    proc_mem as f64 / (1024.0 * 1024.0),
+                    (read_sec + write_sec) / 1024.0,
+                ));
+            }
+
             proc_list.push(ProcItem {
-                pid: pid.as_u32(),
+                pid: proc_pid,
                 name: proc_.name().to_string(),
                 cpu_usage: proc_.cpu_usage(),
                 mem_bytes: proc_mem,
                 mem_pct,
-                read_bytes_sec: disk_usage.read_bytes as f64 / elapsed_secs,
-                write_bytes_sec: disk_usage.written_bytes as f64 / elapsed_secs,
+                read_bytes_sec: read_sec,
+                write_bytes_sec: write_sec,
                 user: proc_
                     .user_id()
                     .map(|u| u.to_string())
@@ -362,10 +423,26 @@ impl MetricsCollector {
         metrics.total_processes = proc_list.len();
         metrics.total_threads = total_threads;
         metrics.processes = proc_list;
+
+        // Sample Focused Process Ring Buffers
+        if let Some(ref mut focused) = metrics.focused_process {
+            if let Some((f_cpu, f_mem_mb, f_disk_kb)) = focused_sample {
+                focused.cpu_history.push(f_cpu as f64);
+                focused.mem_history.push(f_mem_mb);
+                focused.disk_history.push(f_disk_kb);
+            } else {
+                // Focused process exited
+                focused.cpu_history.push(0.0);
+                focused.mem_history.push(0.0);
+                focused.disk_history.push(0.0);
+            }
+        }
+
+        // Trigger Auto-Save logger with immediate flush
+        self.logger.append_log(&metrics);
     }
 
     fn update_gpu(gpu: &mut GpuMetrics) {
-        // NVML GPU Detection
         if let Ok(nvml) = nvml_wrapper::Nvml::init() {
             if let Ok(device) = nvml.device_by_index(0) {
                 gpu.is_available = true;
@@ -387,7 +464,6 @@ impl MetricsCollector {
             }
         }
 
-        // Standard Fallback when NVML is absent or fails
         gpu.is_available = false;
         gpu.name = "NVIDIA / AMD / Integrated GPU".to_string();
         gpu.utilization = 0.0;
