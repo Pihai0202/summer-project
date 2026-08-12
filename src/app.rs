@@ -4,17 +4,20 @@ use eframe::App;
 use egui::{CentralPanel, Context, TopBottomPanel};
 use parking_lot::RwLock;
 
+use crate::sys::config::AppConfig;
 use crate::sys::logger::LogExporter;
 use crate::sys::metrics::{MetricsCollector, SystemMetrics};
 use crate::ui::proc_panel::ProcAction;
 use crate::ui::{
     BtopTheme, CpuPanelView, DiskNetPanelView, GpuPanelView, HeaderView, MemPanelView,
-    ProcPanelView, ViewFilter,
+    ProcPanelView, SettingsModalView, ViewFilter,
 };
 
 pub struct SystemMonitorApp {
     collector: MetricsCollector,
     metrics: Arc<RwLock<SystemMetrics>>,
+    config: AppConfig,
+    is_settings_open: bool,
     current_filter: ViewFilter,
     refresh_ms: u64,
     last_update: Instant,
@@ -24,17 +27,21 @@ pub struct SystemMonitorApp {
 
 impl SystemMonitorApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let config = AppConfig::load();
+
         // Apply Source Han Sans font & btop theme
         BtopTheme::apply(&cc.egui_ctx);
 
         // Install SVG loaders
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let (collector, metrics) = MetricsCollector::new(60);
+        let (collector, metrics) = MetricsCollector::new(config.history_capacity);
 
         Self {
             collector,
             metrics,
+            config,
+            is_settings_open: false,
             current_filter: ViewFilter::All,
             refresh_ms: 1000,
             last_update: Instant::now(),
@@ -62,6 +69,7 @@ impl App for SystemMonitorApp {
 
         let mut export_csv_requested = false;
         let mut export_json_requested = false;
+        let mut open_settings_requested = false;
         let mut proc_actions = Vec::new();
 
         // 1. Top Header Bar & Central Panel (Read Scope)
@@ -74,10 +82,12 @@ impl App for SystemMonitorApp {
                     HeaderView::show(
                         ui,
                         &metrics_read,
+                        &self.config,
                         &mut self.current_filter,
                         &mut self.refresh_ms,
                         &mut || export_csv_requested = true,
                         &mut || export_json_requested = true,
+                        &mut || open_settings_requested = true,
                     );
                 });
 
@@ -90,9 +100,9 @@ impl App for SystemMonitorApp {
                         match self.current_filter {
                             ViewFilter::All => {
                                 ui.columns(3, |columns| {
-                                    CpuPanelView::show(&mut columns[0], &metrics_read.cpu);
-                                    GpuPanelView::show(&mut columns[1], &metrics_read.gpu);
-                                    MemPanelView::show(&mut columns[2], &metrics_read.mem);
+                                    CpuPanelView::show(&mut columns[0], &metrics_read.cpu, &self.config);
+                                    GpuPanelView::show(&mut columns[1], &metrics_read.gpu, &self.config);
+                                    MemPanelView::show(&mut columns[2], &metrics_read.mem, &self.config);
                                 });
 
                                 ui.add_space(6.0);
@@ -102,32 +112,35 @@ impl App for SystemMonitorApp {
                                         &mut columns[0],
                                         &metrics_read.disks,
                                         &metrics_read.networks,
+                                        &self.config,
                                     );
 
                                     proc_actions = self.proc_view.show(
                                         &mut columns[1],
                                         &metrics_read.processes,
                                         metrics_read.focused_process.as_ref(),
+                                        &self.config,
                                     );
                                 });
                             }
                             ViewFilter::CpuGpu => {
                                 ui.columns(2, |columns| {
-                                    CpuPanelView::show(&mut columns[0], &metrics_read.cpu);
-                                    GpuPanelView::show(&mut columns[1], &metrics_read.gpu);
+                                    CpuPanelView::show(&mut columns[0], &metrics_read.cpu, &self.config);
+                                    GpuPanelView::show(&mut columns[1], &metrics_read.gpu, &self.config);
                                 });
                             }
                             ViewFilter::Memory => {
-                                MemPanelView::show(ui, &metrics_read.mem);
+                                MemPanelView::show(ui, &metrics_read.mem, &self.config);
                             }
                             ViewFilter::DisksNet => {
-                                DiskNetPanelView::show(ui, &metrics_read.disks, &metrics_read.networks);
+                                DiskNetPanelView::show(ui, &metrics_read.disks, &metrics_read.networks, &self.config);
                             }
                             ViewFilter::Processes => {
                                 proc_actions = self.proc_view.show(
                                     ui,
                                     &metrics_read.processes,
                                     metrics_read.focused_process.as_ref(),
+                                    &self.config,
                                 );
                             }
                         }
@@ -135,7 +148,15 @@ impl App for SystemMonitorApp {
             });
         }
 
-        // 2. Process Actions Execution
+        // 2. Open Settings Window
+        if open_settings_requested {
+            self.is_settings_open = true;
+        }
+
+        // Render Settings Window Modal
+        let _ = SettingsModalView::show(ctx, &mut self.is_settings_open, &mut self.config);
+
+        // 3. Process Actions Execution
         for action in proc_actions {
             match action {
                 ProcAction::Focus(pid, name, user) => {
@@ -153,12 +174,12 @@ impl App for SystemMonitorApp {
             }
         }
 
-        // 3. Handle Log Exports with Native OS Save File Dialog
+        // 4. Handle Log Exports with Native OS Save File Dialog
         if export_csv_requested {
             let metrics_snap = self.metrics.read().clone();
             match LogExporter::prompt_and_export_csv(&metrics_snap) {
                 Ok(Some(path)) => self.show_toast(format!("✅ CSV 記錄檔已下載儲存至: {}", path.display())),
-                Ok(None) => {} // User cancelled dialog
+                Ok(None) => {}
                 Err(err) => self.show_toast(format!("❌ CSV 匯出失敗: {}", err)),
             }
         }
@@ -167,19 +188,19 @@ impl App for SystemMonitorApp {
             let metrics_snap = self.metrics.read().clone();
             match LogExporter::prompt_and_export_json(&metrics_snap) {
                 Ok(Some(path)) => self.show_toast(format!("✅ JSON 記錄檔已下載儲存至: {}", path.display())),
-                Ok(None) => {} // User cancelled dialog
+                Ok(None) => {}
                 Err(err) => self.show_toast(format!("❌ JSON 匯出失敗: {}", err)),
             }
         }
 
-        // 4. Render Toast Notification Banner
+        // 5. Render Toast Notification Banner
         if let Some((ref msg, time)) = self.notification_msg.clone() {
             if time.elapsed() < Duration::from_secs(4) {
                 TopBottomPanel::top("toast_panel").show(ctx, |ui| {
                     ui.centered_and_justified(|ui| {
                         ui.label(
                             egui::RichText::new(msg)
-                                .color(BtopTheme::CPU_CYAN)
+                                .color(BtopTheme::cpu_color(&self.config))
                                 .size(13.0)
                                 .strong(),
                         );

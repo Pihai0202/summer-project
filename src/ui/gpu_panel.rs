@@ -1,5 +1,6 @@
 use egui::{Frame, ProgressBar, Ui};
 use egui_plot::{Line, Plot, PlotPoints};
+use crate::sys::config::AppConfig;
 use crate::sys::metrics::GpuMetrics;
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
@@ -7,7 +8,9 @@ use crate::ui::theme::BtopTheme;
 pub struct GpuPanelView;
 
 impl GpuPanelView {
-    pub fn show(ui: &mut Ui, gpu: &GpuMetrics) {
+    pub fn show(ui: &mut Ui, gpu: &GpuMetrics, config: &AppConfig) {
+        let gpu_color = BtopTheme::gpu_color(config);
+
         Frame::canvas(ui.style())
             .fill(BtopTheme::BG_CARD)
             .stroke(egui::Stroke::new(1.0_f32, BtopTheme::BORDER))
@@ -19,7 +22,7 @@ impl GpuPanelView {
                     ui.add(SvgIcons::render_white("gpu_icon", SvgIcons::GPU, 18.0));
                     ui.heading(
                         egui::RichText::new("GPU 顯示卡")
-                            .color(BtopTheme::GPU_GREEN)
+                            .color(gpu_color)
                             .size(15.0)
                             .strong(),
                     );
@@ -30,7 +33,7 @@ impl GpuPanelView {
                             } else if temp > 65 {
                                 BtopTheme::DISK_ORANGE
                             } else {
-                                BtopTheme::GPU_GREEN
+                                gpu_color
                             };
                             ui.horizontal(|ui| {
                                 ui.add(SvgIcons::render_white("temp_icon", SvgIcons::TEMP, 14.0));
@@ -66,7 +69,7 @@ impl GpuPanelView {
                         );
                         let bar = ProgressBar::new(gpu.utilization / 100.0)
                             .text(format!("{:.1}%", gpu.utilization))
-                            .fill(BtopTheme::GPU_GREEN);
+                            .fill(gpu_color);
                         ui.add_sized([ui.available_width() - 10.0, 16.0], bar);
                     });
 
@@ -104,7 +107,7 @@ impl GpuPanelView {
                         .collect();
 
                     let line = Line::new(history_points)
-                        .color(BtopTheme::GPU_GREEN)
+                        .color(gpu_color)
                         .width(2.0_f32)
                         .name("GPU %");
 

@@ -1,6 +1,8 @@
+pub mod config;
 pub mod logger;
 pub mod metrics;
 
+pub use config::{AppConfig, ThemePreset};
 pub use logger::{AutoSaveLogger, LogExporter};
 pub use metrics::{
     CpuCoreData, CpuMetrics, DiskItem, FocusedProcessTracker, GpuMetrics, MemMetrics,

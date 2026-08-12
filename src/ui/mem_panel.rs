@@ -1,5 +1,6 @@
 use egui::{Frame, ProgressBar, Ui};
 use egui_plot::{Line, Plot, PlotPoints};
+use crate::sys::config::AppConfig;
 use crate::sys::metrics::MemMetrics;
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
@@ -7,7 +8,10 @@ use crate::ui::theme::BtopTheme;
 pub struct MemPanelView;
 
 impl MemPanelView {
-    pub fn show(ui: &mut Ui, mem: &MemMetrics) {
+    pub fn show(ui: &mut Ui, mem: &MemMetrics, config: &AppConfig) {
+        let ram_color = BtopTheme::ram_color(config);
+        let cpu_color = BtopTheme::cpu_color(config);
+
         Frame::canvas(ui.style())
             .fill(BtopTheme::BG_CARD)
             .stroke(egui::Stroke::new(1.0_f32, BtopTheme::BORDER))
@@ -19,7 +23,7 @@ impl MemPanelView {
                     ui.add(SvgIcons::render_white("ram_icon", SvgIcons::RAM, 18.0));
                     ui.heading(
                         egui::RichText::new("記憶體 (RAM & Swap)")
-                            .color(BtopTheme::RAM_MAGENTA)
+                            .color(ram_color)
                             .size(15.0)
                             .strong(),
                     );
@@ -53,7 +57,7 @@ impl MemPanelView {
 
                 let ram_bar = ProgressBar::new(ram_pct / 100.0)
                     .text(format!("{:.1}% ({:.2} GB 可用)", ram_pct, avail_gb))
-                    .fill(BtopTheme::RAM_MAGENTA)
+                    .fill(ram_color)
                     .animate(true);
                 ui.add_sized([ui.available_width(), 18.0], ram_bar);
 
@@ -63,7 +67,7 @@ impl MemPanelView {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!("可用: {:.2} GB", avail_gb))
-                            .color(BtopTheme::CPU_CYAN)
+                            .color(cpu_color)
                             .size(11.0),
                     );
                     ui.separator();
@@ -112,7 +116,7 @@ impl MemPanelView {
                     .collect();
 
                 let line = Line::new(history_points)
-                    .color(BtopTheme::RAM_MAGENTA)
+                    .color(ram_color)
                     .width(2.0_f32)
                     .name("RAM %");
 

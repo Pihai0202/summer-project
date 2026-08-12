@@ -1,5 +1,6 @@
 use egui::{Align, Frame, Layout, ScrollArea, Ui};
 use egui_plot::{Line, Plot, PlotPoints};
+use crate::sys::config::AppConfig;
 use crate::sys::metrics::{FocusedProcessTracker, ProcItem};
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
@@ -46,14 +47,19 @@ impl ProcPanelView {
         ui: &mut Ui,
         processes: &[ProcItem],
         focused_process: Option<&FocusedProcessTracker>,
+        config: &AppConfig,
     ) -> Vec<ProcAction> {
         let mut actions = Vec::new();
+        let cpu_color = BtopTheme::cpu_color(config);
+        let ram_color = BtopTheme::ram_color(config);
+        let disk_color = BtopTheme::disk_color(config);
+        let proc_color = BtopTheme::proc_color(config);
 
         // 1. Render Dedicated Focused Process Profiler Inspector if active
         if let Some(focused) = focused_process {
             Frame::canvas(ui.style())
                 .fill(BtopTheme::BG_CARD)
-                .stroke(egui::Stroke::new(1.5_f32, BtopTheme::CPU_CYAN))
+                .stroke(egui::Stroke::new(1.5_f32, cpu_color))
                 .rounding(8.0)
                 .inner_margin(12.0)
                 .show(ui, |ui| {
@@ -64,13 +70,13 @@ impl ProcPanelView {
                                 "📌 特效進程監控儀表板 (PID: {} - {})",
                                 focused.pid, focused.name
                             ))
-                            .color(BtopTheme::CPU_CYAN)
+                            .color(cpu_color)
                             .size(15.0)
                             .strong(),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui
-                                .button(egui::RichText::new("❌ 取消釘選").color(BtopTheme::PROC_RED))
+                                .button(egui::RichText::new("❌ 取消釘選").color(proc_color))
                                 .clicked()
                             {
                                 actions.push(ProcAction::Unfocus);
@@ -93,19 +99,19 @@ impl ProcPanelView {
                         ui.separator();
                         ui.label(
                             egui::RichText::new(format!("當前 CPU: {:.1}%", last_cpu))
-                                .color(BtopTheme::CPU_CYAN)
+                                .color(cpu_color)
                                 .strong(),
                         );
                         ui.separator();
                         ui.label(
                             egui::RichText::new(format!("當前 RAM: {:.1} MB", last_mem))
-                                .color(BtopTheme::RAM_MAGENTA)
+                                .color(ram_color)
                                 .strong(),
                         );
                         ui.separator();
                         ui.label(
                             egui::RichText::new(format!("當前 Disk I/O: {:.1} KB/s", last_disk))
-                                .color(BtopTheme::DISK_ORANGE)
+                                .color(disk_color)
                                 .strong(),
                         );
                     });
@@ -121,7 +127,7 @@ impl ProcPanelView {
                             .map(|(i, &v)| [i as f64, v])
                             .collect();
                         let cpu_line = Line::new(cpu_pts)
-                            .color(BtopTheme::CPU_CYAN)
+                            .color(cpu_color)
                             .width(2.0_f32)
                             .name("Proc CPU %");
 
@@ -141,7 +147,7 @@ impl ProcPanelView {
                             .map(|(i, &v)| [i as f64, v])
                             .collect();
                         let mem_line = Line::new(mem_pts)
-                            .color(BtopTheme::RAM_MAGENTA)
+                            .color(ram_color)
                             .width(2.0_f32)
                             .name("Proc RAM MB");
 
@@ -171,7 +177,7 @@ impl ProcPanelView {
                     ui.add(SvgIcons::render_white("proc_icon", SvgIcons::PROCESS, 18.0));
                     ui.heading(
                         egui::RichText::new("進程管理器 (Process Manager)")
-                            .color(BtopTheme::PROC_RED)
+                            .color(proc_color)
                             .size(15.0)
                             .strong(),
                     );
@@ -219,6 +225,9 @@ impl ProcPanelView {
                 let mut filtered: Vec<&ProcItem> = processes
                     .iter()
                     .filter(|p| {
+                        if !config.show_system_processes && (p.user == "SYSTEM" || p.pid < 100) {
+                            return false;
+                        }
                         if self.search_query.is_empty() {
                             true
                         } else {
@@ -263,12 +272,12 @@ impl ProcPanelView {
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new("PID").color(BtopTheme::TEXT_MUTED).strong());
                         ui.label(egui::RichText::new("進程名稱 (Name)").color(BtopTheme::TEXT_MUTED).strong());
-                        ui.label(egui::RichText::new("CPU %").color(BtopTheme::CPU_CYAN).strong());
-                        ui.label(egui::RichText::new("Memory").color(BtopTheme::RAM_MAGENTA).strong());
-                        ui.label(egui::RichText::new("Disk I/O").color(BtopTheme::DISK_ORANGE).strong());
+                        ui.label(egui::RichText::new("CPU %").color(cpu_color).strong());
+                        ui.label(egui::RichText::new("Memory").color(ram_color).strong());
+                        ui.label(egui::RichText::new("Disk I/O").color(disk_color).strong());
                         ui.label(egui::RichText::new("使用者").color(BtopTheme::TEXT_MUTED).strong());
-                        ui.label(egui::RichText::new("監控").color(BtopTheme::CPU_CYAN).strong());
-                        ui.label(egui::RichText::new("操作").color(BtopTheme::PROC_RED).strong());
+                        ui.label(egui::RichText::new("監控").color(cpu_color).strong());
+                        ui.label(egui::RichText::new("操作").color(proc_color).strong());
                         ui.end_row();
                     });
 
@@ -291,9 +300,9 @@ impl ProcPanelView {
                                     // PID
                                     let pid_text = egui::RichText::new(format!("{}", proc_.pid))
                                         .color(if is_focused {
-                                            BtopTheme::CPU_CYAN
+                                            cpu_color
                                         } else if is_selected {
-                                            BtopTheme::RAM_MAGENTA
+                                            ram_color
                                         } else {
                                             BtopTheme::TEXT_MUTED
                                         })
@@ -305,21 +314,21 @@ impl ProcPanelView {
                                     // Name
                                     ui.label(
                                         egui::RichText::new(&proc_.name)
-                                            .color(if is_focused { BtopTheme::CPU_CYAN } else { BtopTheme::TEXT_PRIMARY })
+                                            .color(if is_focused { cpu_color } else { BtopTheme::TEXT_PRIMARY })
                                             .strong(),
                                     );
 
                                     // CPU %
-                                    let cpu_color = if proc_.cpu_usage > 50.0 {
-                                        BtopTheme::PROC_RED
+                                    let cpu_item_color = if proc_.cpu_usage > 50.0 {
+                                        proc_color
                                     } else if proc_.cpu_usage > 10.0 {
-                                        BtopTheme::DISK_ORANGE
+                                        disk_color
                                     } else {
-                                        BtopTheme::CPU_CYAN
+                                        cpu_color
                                     };
                                     ui.label(
                                         egui::RichText::new(format!("{:.1}%", proc_.cpu_usage))
-                                            .color(cpu_color)
+                                            .color(cpu_item_color)
                                             .strong(),
                                     );
 
@@ -330,14 +339,14 @@ impl ProcPanelView {
                                             "{:.1} MB ({:.1}%)",
                                             mem_mb, proc_.mem_pct
                                         ))
-                                        .color(BtopTheme::RAM_MAGENTA),
+                                        .color(ram_color),
                                     );
 
                                     // Disk I/O
                                     let total_io_kb = (proc_.read_bytes_sec + proc_.write_bytes_sec) / 1024.0;
                                     ui.label(
                                         egui::RichText::new(format!("{:.1} KB/s", total_io_kb))
-                                            .color(BtopTheme::DISK_ORANGE),
+                                            .color(disk_color),
                                     );
 
                                     // User
@@ -351,7 +360,7 @@ impl ProcPanelView {
                                     ui.horizontal(|ui| {
                                         if is_focused {
                                             if ui
-                                                .button(egui::RichText::new("📌 已釘選").color(BtopTheme::CPU_CYAN).size(11.0))
+                                                .button(egui::RichText::new("📌 已釘選").color(cpu_color).size(11.0))
                                                 .clicked()
                                             {
                                                 actions.push(ProcAction::Unfocus);
@@ -369,7 +378,7 @@ impl ProcPanelView {
                                     // Kill button
                                     ui.horizontal(|ui| {
                                         if ui
-                                            .button(egui::RichText::new("❌ 結束").color(BtopTheme::PROC_RED).size(11.0))
+                                            .button(egui::RichText::new("❌ 結束").color(proc_color).size(11.0))
                                             .clicked()
                                         {
                                             self.kill_confirm_pid = Some((proc_.pid, proc_.name.clone()));
@@ -407,7 +416,7 @@ impl ProcPanelView {
                         if ui
                             .button(
                                 egui::RichText::new("確認結束 (Kill)")
-                                    .color(BtopTheme::PROC_RED)
+                                    .color(proc_color)
                                     .strong(),
                             )
                             .clicked()

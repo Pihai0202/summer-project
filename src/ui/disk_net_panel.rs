@@ -1,5 +1,6 @@
 use egui::{Frame, ProgressBar, Ui};
 use egui_plot::{Line, Plot, PlotPoints};
+use crate::sys::config::AppConfig;
 use crate::sys::metrics::{DiskItem, NetItem};
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
@@ -7,7 +8,12 @@ use crate::ui::theme::BtopTheme;
 pub struct DiskNetPanelView;
 
 impl DiskNetPanelView {
-    pub fn show(ui: &mut Ui, disks: &[DiskItem], networks: &[NetItem]) {
+    pub fn show(ui: &mut Ui, disks: &[DiskItem], networks: &[NetItem], config: &AppConfig) {
+        let disk_color = BtopTheme::disk_color(config);
+        let net_color = BtopTheme::net_color(config);
+        let cpu_color = BtopTheme::cpu_color(config);
+        let ram_color = BtopTheme::ram_color(config);
+
         Frame::canvas(ui.style())
             .fill(BtopTheme::BG_CARD)
             .stroke(egui::Stroke::new(1.0_f32, BtopTheme::BORDER))
@@ -19,7 +25,7 @@ impl DiskNetPanelView {
                     ui.add(SvgIcons::render_white("disk_icon", SvgIcons::DISK, 18.0));
                     ui.heading(
                         egui::RichText::new("儲存裝置 (Disks)")
-                            .color(BtopTheme::DISK_ORANGE)
+                            .color(disk_color)
                             .size(15.0)
                             .strong(),
                     );
@@ -67,7 +73,7 @@ impl DiskNetPanelView {
                         ui.add_space(2.0);
 
                         let bar = ProgressBar::new(used_pct as f32 / 100.0)
-                            .fill(BtopTheme::DISK_ORANGE);
+                            .fill(disk_color);
                         ui.add_sized([ui.available_width(), 10.0], bar);
 
                         ui.add_space(6.0);
@@ -83,7 +89,7 @@ impl DiskNetPanelView {
                     ui.add(SvgIcons::render_white("net_icon", SvgIcons::NETWORK, 18.0));
                     ui.heading(
                         egui::RichText::new("網路介面 (Network)")
-                            .color(BtopTheme::NET_BLUE)
+                            .color(net_color)
                             .size(15.0)
                             .strong(),
                     );
@@ -109,7 +115,7 @@ impl DiskNetPanelView {
                                     "⬇ {:.1} KB/s  ⬆ {:.1} KB/s",
                                     rx_kb, tx_kb
                                 ))
-                                .color(BtopTheme::NET_BLUE)
+                                .color(net_color)
                                 .strong()
                                 .size(11.0),
                             );
@@ -134,12 +140,12 @@ impl DiskNetPanelView {
                         .collect();
 
                     let rx_line = Line::new(rx_points)
-                        .color(BtopTheme::CPU_CYAN)
+                        .color(cpu_color)
                         .width(1.5_f32)
                         .name("Download KB/s");
 
                     let tx_line = Line::new(tx_points)
-                        .color(BtopTheme::RAM_MAGENTA)
+                        .color(ram_color)
                         .width(1.5_f32)
                         .name("Upload KB/s");
 

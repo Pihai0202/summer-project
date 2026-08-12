@@ -1,5 +1,6 @@
 use egui::{Color32, Frame, ProgressBar, Ui};
 use egui_plot::{Line, Plot, PlotPoints};
+use crate::sys::config::AppConfig;
 use crate::sys::metrics::CpuMetrics;
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
@@ -7,7 +8,9 @@ use crate::ui::theme::BtopTheme;
 pub struct CpuPanelView;
 
 impl CpuPanelView {
-    pub fn show(ui: &mut Ui, cpu: &CpuMetrics) {
+    pub fn show(ui: &mut Ui, cpu: &CpuMetrics, config: &AppConfig) {
+        let cpu_color = BtopTheme::cpu_color(config);
+
         Frame::canvas(ui.style())
             .fill(BtopTheme::BG_CARD)
             .stroke(egui::Stroke::new(1.0_f32, BtopTheme::BORDER))
@@ -19,7 +22,7 @@ impl CpuPanelView {
                     ui.add(SvgIcons::render_white("cpu_icon", SvgIcons::CPU, 18.0));
                     ui.heading(
                         egui::RichText::new("CPU 處理器")
-                            .color(BtopTheme::CPU_CYAN)
+                            .color(cpu_color)
                             .size(15.0)
                             .strong(),
                     );
@@ -48,12 +51,12 @@ impl CpuPanelView {
                 ui.add_space(4.0);
 
                 let usage = cpu.overall_usage;
-                let usage_color = Self::usage_color(usage);
+                let bar_color = Self::usage_color(usage, cpu_color);
 
                 ui.horizontal(|ui| {
                     let progress_bar = ProgressBar::new(usage / 100.0)
                         .text(format!("{:.1}%", usage))
-                        .fill(usage_color)
+                        .fill(bar_color)
                         .animate(true);
                     ui.add_sized([ui.available_width() - 80.0, 18.0], progress_bar);
 
@@ -67,7 +70,7 @@ impl CpuPanelView {
 
                     ui.label(
                         egui::RichText::new(format!("{:.2} GHz", avg_freq as f64 / 1000.0))
-                            .color(BtopTheme::CPU_CYAN)
+                            .color(cpu_color)
                             .strong(),
                     );
                 });
@@ -86,7 +89,7 @@ impl CpuPanelView {
                             .striped(true)
                             .show(ui, |ui| {
                                 for (i, core) in cpu.cores.iter().enumerate() {
-                                    let col_color = Self::usage_color(core.usage);
+                                    let col_color = Self::usage_color(core.usage, cpu_color);
                                     ui.label(
                                         egui::RichText::new(format!("C{:02}", core.id))
                                             .color(BtopTheme::TEXT_MUTED)
@@ -129,7 +132,7 @@ impl CpuPanelView {
                     .collect();
 
                 let line = Line::new(history_points)
-                    .color(BtopTheme::CPU_CYAN)
+                    .color(cpu_color)
                     .width(2.0_f32)
                     .name("CPU %");
 
@@ -145,13 +148,13 @@ impl CpuPanelView {
             });
     }
 
-    fn usage_color(usage: f32) -> Color32 {
+    fn usage_color(usage: f32, default_color: Color32) -> Color32 {
         if usage > 85.0 {
             BtopTheme::PROC_RED
         } else if usage > 60.0 {
             BtopTheme::DISK_ORANGE
         } else {
-            BtopTheme::CPU_CYAN
+            default_color
         }
     }
 }

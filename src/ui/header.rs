@@ -1,4 +1,5 @@
 use egui::{Align, Layout, Ui};
+use crate::sys::config::AppConfig;
 use crate::sys::metrics::SystemMetrics;
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
@@ -18,11 +19,19 @@ impl HeaderView {
     pub fn show(
         ui: &mut Ui,
         metrics: &SystemMetrics,
+        config: &AppConfig,
         current_filter: &mut ViewFilter,
         refresh_ms: &mut u64,
         on_export_csv: &mut impl FnMut(),
         on_export_json: &mut impl FnMut(),
+        on_open_settings: &mut impl FnMut(),
     ) {
+        let cpu_color = BtopTheme::cpu_color(config);
+        let gpu_color = BtopTheme::gpu_color(config);
+        let ram_color = BtopTheme::ram_color(config);
+        let disk_color = BtopTheme::disk_color(config);
+        let proc_color = BtopTheme::proc_color(config);
+
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
 
@@ -31,7 +40,7 @@ impl HeaderView {
             
             ui.heading(
                 egui::RichText::new("BTOP GUI")
-                    .color(BtopTheme::CPU_CYAN)
+                    .color(cpu_color)
                     .strong()
                     .size(19.0),
             );
@@ -48,24 +57,42 @@ impl HeaderView {
             ui.separator();
 
             // Auto-Save Crash Protection Indicator
-            ui.label(
-                egui::RichText::new("🟢 自動存檔中 (Crash Proof)")
-                    .color(BtopTheme::GPU_GREEN)
-                    .size(11.0),
-            );
+            if config.enable_autosave {
+                ui.label(
+                    egui::RichText::new("🟢 自動存檔中 (Crash Proof)")
+                        .color(gpu_color)
+                        .size(11.0),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new("⚪ 自動存檔已關閉")
+                        .color(BtopTheme::TEXT_MUTED)
+                        .size(11.0),
+                );
+            }
 
             // Right-aligned toolbar
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Settings Button with White Gear SVG Icon
+                ui.horizontal(|ui| {
+                    ui.add(SvgIcons::render_white("settings_btn_icon", SvgIcons::SETTINGS, 16.0));
+                    if ui.button("設定").clicked() {
+                        on_open_settings();
+                    }
+                });
+
+                ui.separator();
+
                 // Export Buttons
                 if ui
-                    .button(egui::RichText::new("📄 匯出 JSON").color(BtopTheme::RAM_MAGENTA).size(12.0))
+                    .button(egui::RichText::new("📄 匯出 JSON").color(ram_color).size(12.0))
                     .clicked()
                 {
                     on_export_json();
                 }
 
                 if ui
-                    .button(egui::RichText::new("💾 匯出 CSV").color(BtopTheme::DISK_ORANGE).size(12.0))
+                    .button(egui::RichText::new("💾 匯出 CSV").color(disk_color).size(12.0))
                     .clicked()
                 {
                     on_export_csv();
@@ -95,10 +122,10 @@ impl HeaderView {
                 // Filter Tabs Buttons
                 let filters = [
                     (ViewFilter::All, "全部 (All)", BtopTheme::TEXT_PRIMARY),
-                    (ViewFilter::CpuGpu, "CPU / GPU", BtopTheme::CPU_CYAN),
-                    (ViewFilter::Memory, "記憶體 (RAM)", BtopTheme::RAM_MAGENTA),
-                    (ViewFilter::DisksNet, "硬碟/網路", BtopTheme::DISK_ORANGE),
-                    (ViewFilter::Processes, "進程 (Procs)", BtopTheme::PROC_RED),
+                    (ViewFilter::CpuGpu, "CPU / GPU", cpu_color),
+                    (ViewFilter::Memory, "記憶體 (RAM)", ram_color),
+                    (ViewFilter::DisksNet, "硬碟/網路", disk_color),
+                    (ViewFilter::Processes, "進程 (Procs)", proc_color),
                 ];
 
                 for (filter, label, color) in filters.iter().rev() {
