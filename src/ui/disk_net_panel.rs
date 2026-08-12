@@ -24,7 +24,7 @@ impl DiskNetPanelView {
                 ui.horizontal(|ui| {
                     ui.add(SvgIcons::render_white("disk_icon", SvgIcons::DISK, 18.0));
                     ui.heading(
-                        egui::RichText::new("儲存裝置 (Disks)")
+                        egui::RichText::new("儲存裝置與讀寫速率 (Disks & Transfer Rates)")
                             .color(disk_color)
                             .size(15.0)
                             .strong(),
@@ -36,7 +36,7 @@ impl DiskNetPanelView {
                 if disks.is_empty() {
                     ui.label(egui::RichText::new("未檢測到磁碟").color(BtopTheme::TEXT_MUTED));
                 } else {
-                    for disk in disks {
+                    for (idx, disk) in disks.iter().enumerate() {
                         let total_gb = disk.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
                         let avail_gb = disk.available_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
                         let used_gb = total_gb - avail_gb;
@@ -45,6 +45,9 @@ impl DiskNetPanelView {
                         } else {
                             0.0
                         };
+
+                        let read_mb = disk.read_bytes_sec / (1024.0 * 1024.0);
+                        let write_mb = disk.write_bytes_sec / (1024.0 * 1024.0);
 
                         ui.horizontal(|ui| {
                             ui.label(
@@ -58,13 +61,37 @@ impl DiskNetPanelView {
                                     .color(BtopTheme::TEXT_MUTED)
                                     .size(10.0),
                             );
+
+                            // Temperature Badge
+                            if let Some(temp) = disk.temp_celsius {
+                                let temp_color = if temp > 65.0 {
+                                    BtopTheme::PROC_RED
+                                } else if temp > 50.0 {
+                                    BtopTheme::DISK_ORANGE
+                                } else {
+                                    BtopTheme::GPU_GREEN
+                                };
+
+                                ui.horizontal(|ui| {
+                                    ui.add(SvgIcons::render_white("disk_temp_icon", SvgIcons::TEMP, 13.0));
+                                    ui.label(
+                                        egui::RichText::new(format!("{:.0}°C", temp))
+                                            .color(temp_color)
+                                            .strong()
+                                            .size(11.0),
+                                    );
+                                });
+                            }
+
+                            // Read / Write Speeds Badge
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "{:.1} GB / {:.1} GB ({:.0}%)",
-                                        used_gb, total_gb, used_pct
+                                        "⬇ {:.1} MB/s  ⬆ {:.1} MB/s",
+                                        read_mb, write_mb
                                     ))
-                                    .color(BtopTheme::TEXT_MUTED)
+                                    .color(disk_color)
+                                    .strong()
                                     .size(11.0),
                                 );
                             });
@@ -72,15 +99,58 @@ impl DiskNetPanelView {
 
                         ui.add_space(2.0);
 
+                        // Storage Usage Bar
                         let bar = ProgressBar::new(used_pct as f32 / 100.0)
+                            .text(format!(
+                                "{:.1} GB / {:.1} GB ({:.0}%)",
+                                used_gb, total_gb, used_pct
+                            ))
                             .fill(disk_color);
-                        ui.add_sized([ui.available_width(), 10.0], bar);
+                        ui.add_sized([ui.available_width(), 12.0], bar);
+
+                        ui.add_space(4.0);
+
+                        // Dual Line Sparkline for Disk Read & Write MB/s
+                        let read_points: PlotPoints = disk
+                            .read_history
+                            .values()
+                            .enumerate()
+                            .map(|(i, &val)| [i as f64, val])
+                            .collect();
+
+                        let write_points: PlotPoints = disk
+                            .write_history
+                            .values()
+                            .enumerate()
+                            .map(|(i, &val)| [i as f64, val])
+                            .collect();
+
+                        let r_line = Line::new(read_points)
+                            .color(cpu_color)
+                            .width(1.5_f32)
+                            .name("Disk Read MB/s");
+
+                        let w_line = Line::new(write_points)
+                            .color(ram_color)
+                            .width(1.5_f32)
+                            .name("Disk Write MB/s");
+
+                        Plot::new(format!("disk_plot_{}", idx))
+                            .height(48.0)
+                            .show_axes([false, false])
+                            .show_grid(false)
+                            .allow_zoom(false)
+                            .allow_drag(false)
+                            .show(ui, |plot_ui| {
+                                plot_ui.line(r_line);
+                                plot_ui.line(w_line);
+                            });
 
                         ui.add_space(6.0);
                     }
                 }
 
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(6.0);
 
@@ -150,7 +220,7 @@ impl DiskNetPanelView {
                         .name("Upload KB/s");
 
                     Plot::new(format!("net_plot_{}", net.name))
-                        .height(55.0)
+                        .height(48.0)
                         .show_axes([false, false])
                         .show_grid(false)
                         .allow_zoom(false)

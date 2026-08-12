@@ -1,7 +1,10 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
-use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{
+    Components, CpuRefreshKind, Disks, MemoryRefreshKind, Networks, Pid, ProcessRefreshKind,
+    RefreshKind, System,
+};
 use parking_lot::RwLock;
 
 use crate::sys::logger::AutoSaveLogger;
@@ -90,6 +93,9 @@ pub struct DiskItem {
     pub fs_type: String,
     pub read_bytes_sec: f64,
     pub write_bytes_sec: f64,
+    pub temp_celsius: Option<f32>,
+    pub read_history: RingBuffer,
+    pub write_history: RingBuffer,
 }
 
 #[derive(Clone, Debug)]
@@ -158,16 +164,18 @@ pub struct SystemMetrics {
     pub last_update: Instant,
 }
 
-/// Thread-safe Collector handle with crash-proof auto-saver
+/// Thread-safe Collector handle with crash-proof auto-saver and hardware temp sensors
 pub struct MetricsCollector {
     sys: System,
     disks: Disks,
     networks: Networks,
+    components: Components,
     metrics: Arc<RwLock<SystemMetrics>>,
     logger: AutoSaveLogger,
     history_capacity: usize,
     last_sample: Instant,
     prev_net_sample: Instant,
+    prev_proc_disk_io: HashMap<u32, (u64, u64)>,
 }
 
 impl MetricsCollector {
@@ -177,6 +185,7 @@ impl MetricsCollector {
 
         let disks = Disks::new_with_refreshed_list();
         let networks = Networks::new_with_refreshed_list();
+        let components = Components::new_with_refreshed_list();
 
         let brand = sys
             .cpus()
@@ -235,11 +244,13 @@ impl MetricsCollector {
             sys,
             disks,
             networks,
+            components,
             metrics: metrics_arc.clone(),
             logger,
             history_capacity: capacity,
             last_sample: Instant::now(),
             prev_net_sample: Instant::now(),
+            prev_proc_disk_io: HashMap::new(),
         };
 
         (collector, metrics_arc)
@@ -265,7 +276,7 @@ impl MetricsCollector {
         let elapsed_secs = now.duration_since(self.last_sample).as_secs_f64().max(0.1);
         self.last_sample = now;
 
-        // Refresh CPU, Memory, Processes
+        // Refresh CPU, Memory, Processes, Disks, Networks, Components
         self.sys.refresh_specifics(
             RefreshKind::new()
                 .with_cpu(CpuRefreshKind::everything())
@@ -274,6 +285,7 @@ impl MetricsCollector {
         );
         self.disks.refresh_list();
         self.networks.refresh_list();
+        self.components.refresh_list();
 
         let mut metrics = self.metrics.write();
 
@@ -323,63 +335,15 @@ impl MetricsCollector {
         // Update GPU via NVML if present
         Self::update_gpu(&mut metrics.gpu);
 
-        // Update Disks
-        metrics.disks = self
-            .disks
-            .iter()
-            .map(|d| DiskItem {
-                name: d.name().to_string_lossy().to_string(),
-                mount_point: d.mount_point().to_string_lossy().to_string(),
-                total_bytes: d.total_space(),
-                available_bytes: d.available_space(),
-                fs_type: d.file_system().to_string_lossy().to_string(),
-                read_bytes_sec: 0.0,
-                write_bytes_sec: 0.0,
-            })
-            .collect();
-
-        // Update Networks
-        let net_elapsed = now.duration_since(self.prev_net_sample).as_secs_f64().max(0.1);
-        self.prev_net_sample = now;
-
-        let mut updated_nets = Vec::new();
-        for (name, net) in self.networks.iter() {
-            let rx_speed = net.received() as f64 / net_elapsed;
-            let tx_speed = net.transmitted() as f64 / net_elapsed;
-
-            let mut rx_hist = metrics
-                .networks
-                .iter()
-                .find(|n| n.name == *name)
-                .map(|n| n.rx_history.clone())
-                .unwrap_or_else(|| RingBuffer::new(metrics.cpu.history.capacity));
-            let mut tx_hist = metrics
-                .networks
-                .iter()
-                .find(|n| n.name == *name)
-                .map(|n| n.tx_history.clone())
-                .unwrap_or_else(|| RingBuffer::new(metrics.cpu.history.capacity));
-
-            rx_hist.push(rx_speed / 1024.0); // KB/s
-            tx_hist.push(tx_speed / 1024.0); // KB/s
-
-            updated_nets.push(NetItem {
-                name: name.clone(),
-                rx_speed_bytes: rx_speed,
-                tx_speed_bytes: tx_speed,
-                total_rx_bytes: net.total_received(),
-                total_tx_bytes: net.total_transmitted(),
-                rx_history: rx_hist,
-                tx_history: tx_hist,
-            });
-        }
-        metrics.networks = updated_nets;
-
-        // Update Processes
+        // Update Processes & Calculate aggregate Disk Read/Write Rates
         let mut total_threads = 0;
         let mut proc_list = Vec::new();
         let focused_pid = metrics.focused_process.as_ref().map(|f| f.pid);
         let mut focused_sample: Option<(f32, f64, f64)> = None;
+
+        let mut total_sys_read_bytes_sec = 0.0;
+        let mut total_sys_write_bytes_sec = 0.0;
+        let mut curr_proc_io = HashMap::new();
 
         for (pid, proc_) in self.sys.processes() {
             let disk_usage = proc_.disk_usage();
@@ -391,8 +355,18 @@ impl MetricsCollector {
             };
 
             let proc_pid = pid.as_u32();
-            let read_sec = disk_usage.read_bytes as f64 / elapsed_secs;
-            let write_sec = disk_usage.written_bytes as f64 / elapsed_secs;
+            curr_proc_io.insert(proc_pid, (disk_usage.total_read_bytes, disk_usage.total_written_bytes));
+
+            let (read_sec, write_sec) = if let Some(&(prev_read, prev_write)) = self.prev_proc_disk_io.get(&proc_pid) {
+                let r_delta = disk_usage.total_read_bytes.saturating_sub(prev_read) as f64 / elapsed_secs;
+                let w_delta = disk_usage.total_written_bytes.saturating_sub(prev_write) as f64 / elapsed_secs;
+                (r_delta, w_delta)
+            } else {
+                (disk_usage.read_bytes as f64 / elapsed_secs, disk_usage.written_bytes as f64 / elapsed_secs)
+            };
+
+            total_sys_read_bytes_sec += read_sec;
+            total_sys_write_bytes_sec += write_sec;
 
             if Some(proc_pid) == focused_pid {
                 focused_sample = Some((
@@ -420,9 +394,110 @@ impl MetricsCollector {
             total_threads += 1;
         }
 
+        self.prev_proc_disk_io = curr_proc_io;
         metrics.total_processes = proc_list.len();
         metrics.total_threads = total_threads;
         metrics.processes = proc_list;
+
+        // Scan Temperature Sensors from sysinfo Components (NVMe, SSD, HDD, Drive sensors)
+        let mut disk_temps = HashMap::new();
+        for comp in self.components.iter() {
+            let label = comp.label().to_lowercase();
+            if label.contains("nvme") || label.contains("ssd") || label.contains("disk") || label.contains("drive") || label.contains("storage") || label.contains("composite") {
+                disk_temps.insert(comp.label().to_string(), comp.temperature());
+            }
+        }
+
+        // Update Disks with Read/Write MB/s history and Temperature
+        let mut updated_disks = Vec::new();
+        for d in self.disks.iter() {
+            let mount_str = d.mount_point().to_string_lossy().to_string();
+
+            let mut read_hist = metrics
+                .disks
+                .iter()
+                .find(|item| item.mount_point == mount_str)
+                .map(|item| item.read_history.clone())
+                .unwrap_or_else(|| RingBuffer::new(self.history_capacity));
+
+            let mut write_hist = metrics
+                .disks
+                .iter()
+                .find(|item| item.mount_point == mount_str)
+                .map(|item| item.write_history.clone())
+                .unwrap_or_else(|| RingBuffer::new(self.history_capacity));
+
+            // Distribute system disk read/write to active partitions
+            let read_mb = total_sys_read_bytes_sec / (1024.0 * 1024.0);
+            let write_mb = total_sys_write_bytes_sec / (1024.0 * 1024.0);
+
+            read_hist.push(read_mb);
+            write_hist.push(write_mb);
+
+            // Match temperature sensor for this disk if available
+            let matched_temp = disk_temps
+                .iter()
+                .find(|(lbl, _)| {
+                    let l = lbl.to_lowercase();
+                    l.contains(&mount_str.to_lowercase())
+                        || l.contains("nvme")
+                        || l.contains("ssd")
+                        || l.contains("disk")
+                        || l.contains("composite")
+                })
+                .map(|(_, &t)| t);
+
+            updated_disks.push(DiskItem {
+                name: d.name().to_string_lossy().to_string(),
+                mount_point: mount_str,
+                total_bytes: d.total_space(),
+                available_bytes: d.available_space(),
+                fs_type: d.file_system().to_string_lossy().to_string(),
+                read_bytes_sec: total_sys_read_bytes_sec,
+                write_bytes_sec: total_sys_write_bytes_sec,
+                temp_celsius: matched_temp,
+                read_history: read_hist,
+                write_history: write_hist,
+            });
+        }
+        metrics.disks = updated_disks;
+
+        // Update Networks
+        let net_elapsed = now.duration_since(self.prev_net_sample).as_secs_f64().max(0.1);
+        self.prev_net_sample = now;
+
+        let mut updated_nets = Vec::new();
+        for (name, net) in self.networks.iter() {
+            let rx_speed = net.received() as f64 / net_elapsed;
+            let tx_speed = net.transmitted() as f64 / net_elapsed;
+
+            let mut rx_hist = metrics
+                .networks
+                .iter()
+                .find(|n| n.name == *name)
+                .map(|n| n.rx_history.clone())
+                .unwrap_or_else(|| RingBuffer::new(self.history_capacity));
+            let mut tx_hist = metrics
+                .networks
+                .iter()
+                .find(|n| n.name == *name)
+                .map(|n| n.tx_history.clone())
+                .unwrap_or_else(|| RingBuffer::new(self.history_capacity));
+
+            rx_hist.push(rx_speed / 1024.0); // KB/s
+            tx_hist.push(tx_speed / 1024.0); // KB/s
+
+            updated_nets.push(NetItem {
+                name: name.clone(),
+                rx_speed_bytes: rx_speed,
+                tx_speed_bytes: tx_speed,
+                total_rx_bytes: net.total_received(),
+                total_tx_bytes: net.total_transmitted(),
+                rx_history: rx_hist,
+                tx_history: tx_hist,
+            });
+        }
+        metrics.networks = updated_nets;
 
         // Sample Focused Process Ring Buffers
         if let Some(ref mut focused) = metrics.focused_process {
@@ -431,7 +506,6 @@ impl MetricsCollector {
                 focused.mem_history.push(f_mem_mb);
                 focused.disk_history.push(f_disk_kb);
             } else {
-                // Focused process exited
                 focused.cpu_history.push(0.0);
                 focused.mem_history.push(0.0);
                 focused.disk_history.push(0.0);
