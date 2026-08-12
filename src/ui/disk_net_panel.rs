@@ -1,14 +1,20 @@
-use egui::{Frame, ProgressBar, Ui};
+use egui::{Frame, ProgressBar, ScrollArea, Ui};
 use egui_plot::{Line, Plot, PlotPoints};
 use crate::sys::config::AppConfig;
-use crate::sys::metrics::{DiskItem, NetItem};
+use crate::sys::metrics::{DiskItem, NetConnection, NetItem};
 use crate::ui::icons::SvgIcons;
 use crate::ui::theme::BtopTheme;
 
 pub struct DiskNetPanelView;
 
 impl DiskNetPanelView {
-    pub fn show(ui: &mut Ui, disks: &[DiskItem], networks: &[NetItem], config: &AppConfig) {
+    pub fn show(
+        ui: &mut Ui,
+        disks: &[DiskItem],
+        networks: &[NetItem],
+        net_connections: &[NetConnection],
+        config: &AppConfig,
+    ) {
         let disk_color = BtopTheme::disk_color(config);
         let net_color = BtopTheme::net_color(config);
         let cpu_color = BtopTheme::cpu_color(config);
@@ -232,6 +238,47 @@ impl DiskNetPanelView {
 
                     ui.add_space(6.0);
                 }
+
+                // 3. Active Network Socket Connections Table
+                ui.add_space(6.0);
+                ui.collapsing(
+                    egui::RichText::new("🔌 活躍 Socket 連線 (Active Connections)")
+                        .color(net_color)
+                        .size(12.0),
+                    |ui| {
+                        ScrollArea::vertical()
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                egui::Grid::new("net_conns_grid")
+                                    .num_columns(5)
+                                    .spacing([12.0, 4.0])
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.label(egui::RichText::new("協定").color(BtopTheme::TEXT_MUTED).size(11.0));
+                                        ui.label(egui::RichText::new("區域位置").color(BtopTheme::TEXT_MUTED).size(11.0));
+                                        ui.label(egui::RichText::new("遠端位置").color(BtopTheme::TEXT_MUTED).size(11.0));
+                                        ui.label(egui::RichText::new("狀態").color(BtopTheme::TEXT_MUTED).size(11.0));
+                                        ui.label(egui::RichText::new("PID").color(BtopTheme::TEXT_MUTED).size(11.0));
+                                        ui.end_row();
+
+                                        for conn in net_connections {
+                                            ui.label(egui::RichText::new(&conn.protocol).color(cpu_color).size(11.0));
+                                            ui.label(egui::RichText::new(&conn.local_addr).color(BtopTheme::TEXT_PRIMARY).size(11.0));
+                                            ui.label(egui::RichText::new(&conn.remote_addr).color(BtopTheme::TEXT_MUTED).size(11.0));
+                                            ui.label(egui::RichText::new(&conn.state).color(net_color).strong().size(11.0));
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    conn.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string()),
+                                                )
+                                                .color(ram_color)
+                                                .size(11.0),
+                                            );
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                    },
+                );
             });
     }
 }

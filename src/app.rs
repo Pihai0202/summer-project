@@ -112,6 +112,7 @@ impl App for SystemMonitorApp {
                                         &mut columns[0],
                                         &metrics_read.disks,
                                         &metrics_read.networks,
+                                        &metrics_read.net_connections,
                                         &self.config,
                                     );
 
@@ -133,7 +134,13 @@ impl App for SystemMonitorApp {
                                 MemPanelView::show(ui, &metrics_read.mem, &self.config);
                             }
                             ViewFilter::DisksNet => {
-                                DiskNetPanelView::show(ui, &metrics_read.disks, &metrics_read.networks, &self.config);
+                                DiskNetPanelView::show(
+                                    ui,
+                                    &metrics_read.disks,
+                                    &metrics_read.networks,
+                                    &metrics_read.net_connections,
+                                    &self.config,
+                                );
                             }
                             ViewFilter::Processes => {
                                 proc_actions = self.proc_view.show(
